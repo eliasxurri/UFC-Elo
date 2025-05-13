@@ -37,11 +37,13 @@ def calculate_elo_per_division(fights, k_base=32):
                 elo_scores[fighter_b][division] = 1500
             fight_counts[fighter_b][division] = 0
         
-        ra = elo_scores[fighter_a][division]
-        rb = elo_scores[fighter_b][division]
+        # Guardar el Elo pre-pelea
+        ra_pre = elo_scores[fighter_a][division]
+        rb_pre = elo_scores[fighter_b][division]
         
-        ea = 1 / (1 + 10 ** ((rb - ra) / 400))
-        eb = 1 / (1 + 10 ** ((ra - rb) / 400))
+        # Calcular el Elo post-pelea
+        ea = 1 / (1 + 10 ** ((rb_pre - ra_pre) / 400))
+        eb = 1 / (1 + 10 ** ((ra_pre - rb_pre) / 400))
         
         if winner == 'RED':
             sa = 1
@@ -56,69 +58,69 @@ def calculate_elo_per_division(fights, k_base=32):
         k_a = k_base
         k_b = k_base
         
+        # Actualizar Elo post-pelea
         elo_scores[fighter_a][division] += k_a * (sa - ea)
         elo_scores[fighter_b][division] += k_b * (sb - eb)
         fight_counts[fighter_a][division] += 1
         fight_counts[fighter_b][division] += 1
         
+        # Guardar en el historial con Elo pre-pelea y post-pelea
         elo_history.append({
             'Date': date,
-            'fighter': fighter_a,
+            'fighter_a': fighter_a,
+            'fighter_b': fighter_b,
             'division': division,
-            'elo': elo_scores[fighter_a][division]
-        })
-        elo_history.append({
-            'Date': date,
-            'fighter': fighter_b,
-            'division': division,
-            'elo': elo_scores[fighter_b][division]
+            'elo_a_pre': ra_pre,
+            'elo_b_pre': rb_pre,
+            'elo_a_post': elo_scores[fighter_a][division],
+            'elo_b_post': elo_scores[fighter_b][division]
         })
     
     return elo_scores, pd.DataFrame(elo_history)
 
-# Load and prepare the dataset
+# Cargar y preparar el dataset
 fights = pd.read_csv('../Datasets/ufc_fight_data.csv')
 fights['Date'] = pd.to_datetime(fights['Date'], format='%d-%m-%y', errors='coerce')
 fights = fights.dropna(subset=['Date']).sort_values('Date')
 
-# Calculate Elo per division
+# Calcular Elo por división
 elo_scores, elo_history_df = calculate_elo_per_division(fights)
 
-# Create a DataFrame for final Elo per fighter per division
-elo_data = []
-for fighter, divisions in elo_scores.items():
-    for division, elo in divisions.items():
-        elo_data.append({
-            'fighter': fighter,
-            'division': division,
-            'elo': elo
-        })
-elo_df = pd.DataFrame(elo_data)
+# Unir el Elo pre-pelea al dataset original
+fights = fights.merge(elo_history_df[['Date', 'fighter_a', 'fighter_b', 'elo_a_pre', 'elo_b_pre']],
+                      left_on=['Date', 'RedFighter', 'BlueFighter'],
+                      right_on=['Date', 'fighter_a', 'fighter_b'],
+                      how='left')
 
-# Save to CSV
-elo_df.to_csv('../Datasets/elo_per_division.csv', index=False)
-print("Elo per division saved to 'elo_per_division.csv'")
+# Eliminar columnas temporales
+fights = fights.drop(columns=['fighter_a', 'fighter_b'], errors='ignore')
 
-# Get unique divisions
-divisions = elo_df['division'].unique()
+# Guardar el dataset actualizado
+fights.to_csv('../Datasets/ufc_fight_data_with_elo.csv', index=False)
+print("Dataset con Elo pre-pelea guardado en '../Datasets/ufc_fight_data_with_elo.csv'")
 
-# For each division, get top 5 fighters and plot their Elo trends
+# Generar gráficos de tendencias por división
+divisions = fights['WeightClass'].unique()
+
 for division in divisions:
-    # Get top 5 fighters in this division
-    top_5 = elo_df[elo_df['division'] == division].nlargest(5, 'elo')['fighter'].tolist()
+    # Filtrar el historial para la división
+    division_history = elo_history_df[elo_history_df['division'] == division]
     
-    # Filter history for these fighters in this division
-    division_history = elo_history_df[(elo_history_df['division'] == division) & (elo_history_df['fighter'].isin(top_5))]
+    # Obtener los 5 mejores peleadores en la división
+    top_5 = division_history.groupby('fighter_a')['elo_a_post'].max().nlargest(5).index.tolist()
     
-    # Plot
+    # Filtrar el historial para estos peleadores
+    top_5_history = division_history[division_history['fighter_a'].isin(top_5)]
+    
+    # Graficar
     plt.figure(figsize=(10, 6))
-    sns.lineplot(data=division_history, x='Date', y='elo', hue='fighter', marker='o')
-    plt.title(f'Elo Trends for Top 5 Fighters in {division}')
-    plt.xlabel('Date')
-    plt.ylabel('Elo Rating')
-    plt.legend(title='Fighter')
+    sns.lineplot(data=top_5_history, x='Date', y='elo_a_post', hue='fighter_a', marker='o')
+    plt.title(f'Tendencias de Elo para los 5 Mejores Peleadores en {division}')
+    plt.xlabel('Fecha')
+    plt.ylabel('Rating Elo')
+    plt.legend(title='Peleador')
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig(f'elo_trends_{division.replace(" ", "_").lower()}.png')
+    plt.savefig(f'../Graphs/elo_trends_{division.replace(" ", "_").lower()}.png')
     plt.close()
-    print(f"Trend plot for {division} saved as '../Graphs/elo_trends_{division.replace(' ', '_').lower()}.png'")
+    print(f"Gráfico de tendencias para {division} guardado en '../Graphs/elo_trends_{division.replace(' ', '_').lower()}.png'")
